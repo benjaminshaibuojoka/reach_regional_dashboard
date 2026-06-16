@@ -1,0 +1,63 @@
+version: "3.9"
+
+# REACH Regional Dashboard
+# - backend : FastAPI + SQLite (SpatiaLite-capable) + ingestion of Excel/shapefiles
+# - frontend: React (Vite build) served by Nginx, proxying /api -> backend
+#
+# Data layout expected on the host (relative to this file):
+#   ./Dami Action_MAIN11.xlsx        (place your Excel here)
+#   ./gadm41_NGA_shp/                (GADM Nigeria admin polygons)
+#   ./gadm41_NER_shp/                (GADM Niger  admin polygons)
+#   ./gadm41_MLI_shp/                (GADM Mali   admin polygons)
+#   ./backend/data/                  (writable; SQLite DB lands here)
+
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: reach-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/data:/app/data
+      - "./Dami Action_MAIN1.xlsx:/data_sources/Dami Action_MAIN1.xlsx:ro"
+      - ./gadm41_NGA_shp:/data_sources/gadm41_NGA_shp:ro
+      - ./gadm41_NER_shp:/data_sources/gadm41_NER_shp:ro
+      - ./gadm41_MLI_shp:/data_sources/gadm41_MLI_shp:ro
+    environment:
+      - DB_PATH=/app/data/reach.db
+      - EXCEL_PATH=/data_sources/Dami Action_MAIN1.xlsx
+      - SHP_MLI=/data_sources/gadm41_MLI_shp
+      - SHP_NER=/data_sources/gadm41_NER_shp
+      - SHP_NGA=/data_sources/gadm41_NGA_shp
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:5173
+      # Set FORCE_REINGEST=1 to rebuild the SQLite DB on next start
+      - FORCE_REINGEST=0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status == 200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # In the Nginx image, /api is proxied to backend:8000 (see frontend/nginx.conf),
+        # so the build-time API base can stay relative.
+        VITE_API_BASE: /api
+    container_name: reach-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

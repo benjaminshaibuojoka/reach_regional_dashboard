@@ -1,0 +1,28 @@
+{
+  "name": "reach-dashboard-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173 --host"
+  },
+  "dependencies": {
+    "i18next": "^23.16.4",
+    "leaflet": "^1.9.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-i18next": "^15.1.1",
+    "react-leaflet": "^4.2.1",
+    "react-router-dom": "^6.27.0",
+    "recharts": "^2.13.3",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^2.5.2",
+    "pptxgenjs": "^3.12.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.10"
+  }
+}
