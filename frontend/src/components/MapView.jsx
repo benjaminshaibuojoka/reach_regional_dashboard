@@ -30,7 +30,9 @@ function colorGrowth(growth) {
   return "#7a6510";                            // deep amber
 }
 
-const NO_DATA_FILL = "#f5f1e7";
+// Warm grey ("greyed out") so missing data is unmistakable at country level
+// and at state level inside Nigeria / Mali where some states report no rounds.
+const NO_DATA_FILL = "#d6d3cd";
 
 const FIXED_EXTENT = {
   REGIONAL: [[3.5, -13], [25, 16]],
@@ -74,30 +76,71 @@ function FixedExtent({ country, extent, maxZoom, focusGeo, onReady }) {
   return null;
 }
 
-function StateLabels({ geo }) {
+/**
+ * Permanent labels on the active polygon set. Tier is the admin level being
+ * displayed (0 = country, 1 = state). Country tier shows NAME + %, state tier
+ * shows NAME only (the user found name+% too cluttered on country pages).
+ */
+function MapLabels({ geo, tier = 1 }) {
   const map = useMap();
   useEffect(() => {
     if (!geo?.features?.length) return;
-    const layers = [];
-    for (const f of geo.features) {
-      const p = f.properties || {};
-      if (!p.name || !p.has_data) continue;
-      try {
-        const layer = L.geoJSON(f);
-        const c = layer.getBounds().getCenter();
-        const m = L.marker(c, {
-          icon: L.divIcon({
-            className: "map-label map-label--state",
-            html: `<span>${String(p.name).toUpperCase()}</span>`,
-            iconSize: null,
-          }),
-          interactive: false, keyboard: false,
-        });
-        m.addTo(map); layers.push(m);
-      } catch { /* ignore */ }
-    }
-    return () => { layers.forEach((m) => map.removeLayer(m)); };
-  }, [geo, map]);
+    let layers = [];
+
+    const renderOnce = () => {
+      const z = map.getZoom();
+      // Font scales gently with zoom so the labels stay legible without
+      // exploding at deep zoom levels.
+      const fontSize = tier === 0
+        ? Math.max(11, Math.min(16, 9 + z * 0.9))
+        : Math.max(7.5, Math.min(11, z * 1.1));
+
+      for (const f of geo.features) {
+        const p = f.properties || {};
+        if (!p.name) continue;
+        if (tier === 1 && !p.has_data) continue;
+        try {
+          const layer = L.geoJSON(f);
+          const center = layer.getBounds().getCenter();
+          const html = tier === 0
+            ? `<span style="font-size:${fontSize}px">${String(p.name).toUpperCase()}${
+                p.percentage != null ? ` · <b>${p.percentage}%</b>` : ""
+              }</span>`
+            : `<span style="font-size:${fontSize}px">${String(p.name).toUpperCase()}</span>`;
+          const m = L.marker(center, {
+            icon: L.divIcon({
+              className: `map-label map-label--${tier === 0 ? "country" : "state"}`,
+              html, iconSize: null,
+            }),
+            interactive: false, keyboard: false,
+          });
+          m.addTo(map); layers.push(m);
+        } catch { /* ignore */ }
+      }
+    };
+
+    const clear = () => { layers.forEach((m) => map.removeLayer(m)); layers = []; };
+    const rerender = () => { clear(); renderOnce(); };
+
+    renderOnce();
+    map.on("zoomend", rerender);
+    return () => {
+      map.off("zoomend", rerender);
+      clear();
+    };
+  }, [geo, map, tier]);
+  return null;
+}
+
+/** Tiny helper component: reports the current zoom up to the parent. */
+function ZoomReporter({ onZoom }) {
+  const map = useMap();
+  useEffect(() => {
+    const tell = () => onZoom(map.getZoom());
+    tell();
+    map.on("zoomend", tell);
+    return () => map.off("zoomend", tell);
+  }, [map, onZoom]);
   return null;
 }
 
@@ -109,14 +152,26 @@ export default function MapView({
   showLegend = true,
   showViewToggle = true,        // home page hides this
   maxZoomOverride = null,       // per-page override (e.g. landing wants +1)
+  labelMode = "state",          // "state" → always render state polygons (default;
+                                //   country pages).
+                                // "auto"  → admin-0 polygons at low zoom, admin-1
+                                //   at high zoom (Regional view).
+                                // "home"  → admin-0 OUTLINE + only with-data
+                                //   admin-1 polygons at low zoom; all admin-1
+                                //   at high zoom (Landing).
+  countryLabelCutoff = 5.5,     // zoom threshold for the switch
 }) {
   const { t } = useTranslation();
-  const [geo, setGeo] = useState(null);
+  const [geo, setGeo] = useState(null);            // admin-1 (states) — always loaded
+  const [geoZero, setGeoZero] = useState(null);    // admin-0 — needed in auto + home
+  const [geoDataBlob, setGeoDataBlob] = useState(null); // welded has-data shape per country
+  const [zoom, setZoom] = useState(null);
   const [view, setView] = useState("coverage");        // "coverage" | "growth"
   const mapRef = useRef(null);
   const scope = country === "REGIONAL" ? undefined : country;
   const { setHovered } = useHover();
 
+  // Load admin-1 (always).
   useEffect(() => {
     let cancelled = false;
     setGeo(null);
@@ -136,15 +191,63 @@ export default function MapView({
     return () => { cancelled = true; };
   }, [country, adminLevel, view, JSON.stringify(filters)]);
 
+  // Load admin-0 OUTLINE whenever it's needed (auto + home).
+  useEffect(() => {
+    if (labelMode !== "auto" && labelMode !== "home") { setGeoZero(null); return; }
+    let cancelled = false;
+    api.boundaries({
+      country: scope, admin_level: 0, view: "coverage", kind: "outline",
+      year: filters.year, quarter: filters.quarter, round: filters.round,
+    }).then((g) => { if (!cancelled) setGeoZero(g); });
+    return () => { cancelled = true; };
+  }, [labelMode, country, JSON.stringify(filters)]);
+
+  // Home mode also needs the welded WITH-DATA blob (one polygon per country)
+  // so the coloured area inside the outline has no internal slivers.
+  useEffect(() => {
+    if (labelMode !== "home") { setGeoDataBlob(null); return; }
+    let cancelled = false;
+    api.boundaries({
+      country: scope, admin_level: 0, view: "coverage", kind: "data",
+      year: filters.year, quarter: filters.quarter, round: filters.round,
+    }).then((g) => { if (!cancelled) setGeoDataBlob(g); });
+    return () => { cancelled = true; };
+  }, [labelMode, country, JSON.stringify(filters)]);
+
+  const lowZoom = zoom != null && zoom < countryLabelCutoff;
+  const activeTier = ((labelMode === "auto" || labelMode === "home") && lowZoom)
+    ? 0 : 1;
+
+  // The primary polygon layer (filled, interactive).
+  const filledGeo = useMemo(() => {
+    if (labelMode === "auto" && lowZoom) return geoZero;
+    if (labelMode === "home" && lowZoom) return geoDataBlob;
+    return geo;
+  }, [labelMode, lowZoom, geo, geoZero, geoDataBlob]);
+
+  // The labels come from whichever set matches `activeTier`. For home mode
+  // we use admin-0 for country labels and admin-1 for state labels.
+  const labelGeo = activeTier === 0 ? geoZero : geo;
+
+  // Home mode at low zoom hides state boundaries so the with-data polygons
+  // read as one colored region inside the country outline.
+  const hideStateStrokes = labelMode === "home" && lowZoom;
+
   const style = (f) => {
     const p = f.properties || {};
-    // No-data: solid boundary line (matches data polygons), light cream fill.
+    // No-data: warm-grey fill so missing areas read as "no data" from a
+    // distance (not tinted with the basemap underneath).
     if (!p.has_data) {
       return { fillColor: NO_DATA_FILL, weight: 0.6, color: "#66625e",
-               fillOpacity: 0.45 };
+               fillOpacity: 1 };
     }
     const fill = view === "growth" ? colorGrowth(p.growth_pct) : colorCoverage(p.percentage);
-    return { fillColor: fill, weight: 0.6, color: "#66625e", fillOpacity: 0.92 };
+    return {
+      fillColor: fill,
+      weight: hideStateStrokes ? 0 : 0.6,
+      color: "#66625e",
+      fillOpacity: 0.92,
+    };
   };
 
   const onEach = (feature, layer) => {
@@ -196,12 +299,19 @@ export default function MapView({
     layer.bindTooltip(tip, { sticky: true, direction: "top", offset: [0, -4] });
 
     layer.on("mouseover", (e) => {
-      e.target.setStyle({ weight: 1.6, color: "#2a2825", fillOpacity: noData ? 0.55 : 1 });
+      e.target.setStyle({
+        weight: hideStateStrokes ? 0 : 1.6,
+        color: "#2a2825",
+        fillOpacity: 1,
+      });
       if (p.name) setHovered(p.name);
     });
     layer.on("mouseout",  (e) => {
-      e.target.setStyle({ weight: 0.6, color: "#66625e",
-                          fillOpacity: noData ? 0.45 : 0.92 });
+      e.target.setStyle({
+        weight: hideStateStrokes ? 0 : 0.6,
+        color: "#66625e",
+        fillOpacity: noData ? 1 : 0.92,
+      });
       setHovered(null);
     });
     if (onPolygonClick) layer.on("click", () => onPolygonClick(p));
@@ -209,7 +319,18 @@ export default function MapView({
 
   const extent  = FIXED_EXTENT[country] || FIXED_EXTENT.REGIONAL;
   const maxZoom = maxZoomOverride ?? (FIT_MAX_ZOOM[country] || 5);
-  const geoKey  = useMemo(() => JSON.stringify(filters) + country + adminLevel + view, [country, adminLevel, view, filters]);
+  const geoKey  = useMemo(
+    () => JSON.stringify(filters) + country + labelMode + activeTier + view,
+    [country, labelMode, activeTier, view, filters],
+  );
+
+  // Style for the country-outline-only layer drawn behind the filled polygons
+  // in home mode at low zoom.
+  const outlineStyle = () => ({
+    fillOpacity: 0,
+    weight: 1.4,
+    color: "#66625e",
+  });
 
   const resetZoom = () => { if (mapRef.current) safeFit(mapRef.current, extent, maxZoom); };
 
@@ -244,14 +365,22 @@ export default function MapView({
             subdomains={["a","b","c","d"]}
           />
         </Pane>
+        {/* Home mode at low zoom: country outline behind the filled
+            with-data polygons, so areas without data show as plain outline. */}
+        {labelMode === "home" && lowZoom && geoZero && (
+          <Pane name="country-outline" style={{ zIndex: 350 }}>
+            <GeoJSON key={geoKey + ":outline"} data={geoZero} style={outlineStyle} />
+          </Pane>
+        )}
         <Pane name="data" style={{ zIndex: 400 }}>
-          {geo && (
-            <GeoJSON key={geoKey} data={geo} style={style} onEachFeature={onEach} />
+          {filledGeo && (
+            <GeoJSON key={geoKey} data={filledGeo} style={style} onEachFeature={onEach} />
           )}
         </Pane>
         <Pane name="labels" style={{ zIndex: 650 }}>
-          {geo && <StateLabels geo={geo} />}
+          {labelGeo && <MapLabels geo={labelGeo} tier={activeTier} />}
         </Pane>
+        <ZoomReporter onZoom={setZoom} />
         <ZoomControl position="topright" />
         <FixedExtent
           country={country} extent={extent} maxZoom={maxZoom}

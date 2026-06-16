@@ -132,6 +132,10 @@
   "download_methodology_help": "Définitions des indicateurs, formules, hypothèses et sources pour chaque KPI.",
   "coverage_over_100_note": "{{count}} zone(s) signalent une couverture supérieure à 100 %. Cela indique généralement une sous-estimation du dénominateur du microplan ; les valeurs sont affichées telles que rapportées (non plafonnées) pour vérification.",
   "last_updated": "Dernière mise à jour",
+  "subs_smtp_off_title": "L'envoi d'e-mails n'est pas configuré",
+  "subs_smtp_off_body": "Vous pouvez enregistrer les abonnements, mais le serveur n'a pas de SMTP sortant défini, donc aucun e-mail ne sera réellement envoyé. Demandez à l'administrateur de configurer REACH_SMTP_HOST/REACH_SMTP_FROM (et les identifiants si nécessaire) puis de redémarrer le backend.",
+  "subs_smtp_on_title": "L'envoi d'e-mails est actif",
+  "subs_smtp_on_body": "Les abonnements créés ici déclencheront un e-mail de confirmation immédiat via {{host}} (depuis {{from}}).",
 
   "menu_quick_nav": "Navigation rapide",
   "menu_countries": "Pays",

@@ -19,6 +19,8 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse, StreamingResponse, Response
+from shapely.geometry import shape, mapping
+from shapely.ops import unary_union
 
 from ..database import get_conn
 
@@ -300,19 +302,221 @@ def _round_growth_per_state(conn, country):
     return out
 
 
+# Lazy in-memory cache of admin-0 (country outline) GeoJSON. Computed from
+# the union of the admin-1 polygons; never changes between requests.
+_COUNTRY_OUTLINE_CACHE: dict[str, dict] = {}
+
+# Cache of welded has-data shapes keyed by (country, filter-signature).
+_DATA_BLOB_CACHE: dict[tuple, dict] = {}
+
+
+def _data_blob_geojson(conn, ct: str, year, quarter, round_) -> Optional[dict]:
+    """Return ONE welded GeoJSON polygon covering all admin-1 areas with data
+    for this country under the active filter set. Used by the Landing /
+    Regional low-zoom view so the coloured region appears seamless — no
+    inter-state slivers."""
+    key = (ct, year, quarter, round_)
+    cached = _DATA_BLOB_CACHE.get(key)
+    if cached is not None:
+        return cached
+    where, params = _where(ct, year, quarter, round_)
+    rows = conn.execute(
+        f"""SELECT spatial_state AS s,
+                   COALESCE(SUM(children_eligible),0) AS e,
+                   COALESCE(SUM(children_treated),0)  AS t
+              FROM treatments{where}
+              GROUP BY spatial_state""", params,
+    ).fetchall()
+    has_data = {str(r["s"]).upper() for r in rows
+                if r["s"] and (int(r["e"]) > 0 or int(r["t"]) > 0)}
+    if not has_data:
+        _DATA_BLOB_CACHE[key] = None
+        return None
+    geoms = []
+    for b in conn.execute(
+        "SELECT name_upper, geojson FROM boundaries WHERE country=? AND admin_level=1",
+        (ct,),
+    ).fetchall():
+        if b["name_upper"] not in has_data:
+            continue
+        try:
+            g = shape(json.loads(b["geojson"]))
+            if not g.is_valid:
+                g = g.buffer(0)
+            geoms.append(g)
+        except (json.JSONDecodeError, ValueError):
+            continue
+    if not geoms:
+        _DATA_BLOB_CACHE[key] = None
+        return None
+    merged = unary_union(geoms)
+    try:
+        merged = merged.buffer(0)
+        # Close gaps between independently-simplified neighbours, then
+        # simplify slightly so the payload stays small.
+        merged = merged.buffer(0.03).buffer(-0.025)
+        merged = merged.simplify(0.04, preserve_topology=True)
+    except Exception:
+        pass
+    out = mapping(merged)
+    _DATA_BLOB_CACHE[key] = out
+    return out
+
+
+def _country_outline_geojson(conn, ct: str) -> Optional[dict]:
+    """Return a clean GeoJSON polygon for the whole country.
+
+    Preferred path: the admin-0 row loaded from the official GADM admin-0
+    shapefile (one clean country outline, no internal lines).
+    Fallback: synthesise the outline by welding the admin-1 polygons; used
+    only when an admin-0 row isn't present (e.g. a DB ingested before the
+    admin-0 loader was added).
+    """
+    cached = _COUNTRY_OUTLINE_CACHE.get(ct)
+    if cached is not None:
+        return cached
+
+    # 1. Prefer the official GADM admin-0 polygon if it's in the DB.
+    row = conn.execute(
+        "SELECT geojson FROM boundaries WHERE country=? AND admin_level=0 LIMIT 1",
+        (ct,),
+    ).fetchone()
+    if row:
+        try:
+            geom = json.loads(row["geojson"])
+            _COUNTRY_OUTLINE_CACHE[ct] = geom
+            return geom
+        except json.JSONDecodeError:
+            pass  # fall through to synthesis
+    geoms = []
+    for r in conn.execute(
+        "SELECT geojson FROM boundaries WHERE country=? AND admin_level=1",
+        (ct,),
+    ).fetchall():
+        try:
+            g = shape(json.loads(r["geojson"]))
+            if not g.is_valid:
+                g = g.buffer(0)
+            geoms.append(g)
+        except (json.JSONDecodeError, ValueError):
+            continue
+    if not geoms:
+        return None
+    merged = unary_union(geoms)
+    try:
+        # Fix any leftover topology issues, then weld near-touching vertices
+        # using an outward+inward buffer (clipper-style "closing").
+        merged = merged.buffer(0)
+        merged = merged.buffer(0.02).buffer(-0.02)
+        merged = merged.simplify(0.04, preserve_topology=True)
+    except Exception:
+        pass
+
+    # Drop tiny artifact polygons / slivers — anything smaller than ~0.05
+    # square degrees (about the size of a small island; well below any real
+    # state). Keeps Nigeria's main land mass and any genuinely large island.
+    from shapely.geometry import MultiPolygon, Polygon
+    AREA_FLOOR = 0.05
+    if merged.geom_type == "MultiPolygon":
+        kept = [p for p in merged.geoms if p.area >= AREA_FLOOR]
+        if kept:
+            merged = MultiPolygon(kept) if len(kept) > 1 else kept[0]
+    # Same threshold for inner holes — drop tiny donuts so the shape reads as
+    # one piece at a glance.
+    HOLE_FLOOR = 0.05
+    def _strip_small_holes(poly: Polygon) -> Polygon:
+        big = [ring for ring in poly.interiors if Polygon(ring).area >= HOLE_FLOOR]
+        return Polygon(poly.exterior, big)
+    if merged.geom_type == "Polygon":
+        merged = _strip_small_holes(merged)
+    elif merged.geom_type == "MultiPolygon":
+        merged = MultiPolygon([_strip_small_holes(p) for p in merged.geoms])
+
+    result = mapping(merged)
+    _COUNTRY_OUTLINE_CACHE[ct] = result
+    return result
+
+
 @router.get("/boundaries")
 def boundaries(
     country: Optional[str] = None,
     state: Optional[str] = None,
-    admin_level: int = Query(1, ge=1, le=2),
+    admin_level: int = Query(1, ge=0, le=2),
     year: Optional[int] = None,
     quarter: Optional[str] = None,
     round: Optional[int] = Query(None, alias="round"),
     view: str = Query("coverage", pattern="^(coverage|growth)$"),
+    kind: str = Query("outline", pattern="^(outline|data)$"),
 ):
     c = _norm(country)
     countries = [c] if c else list(VALID_COUNTRIES)
     features = []
+
+    # ----- admin_level=0 with kind=data: welded with-data shape per country -
+    # Used by the Landing / Regional low-zoom view so the coloured region
+    # reads as one piece, no internal slivers.
+    if admin_level == 0 and kind == "data":
+        with get_conn(read_only=True) as conn:
+            for ct in countries:
+                where, params = _where(ct, year, quarter, round)
+                row = conn.execute(
+                    f"""SELECT COALESCE(SUM(children_eligible),0) AS eligible,
+                               COALESCE(SUM(children_treated),0)  AS treated
+                          FROM treatments{where}""", params
+                ).fetchone()
+                elig = int(row["eligible"] or 0)
+                trt  = int(row["treated"]  or 0)
+                pct  = round_pct(trt, elig)
+                geom = _data_blob_geojson(conn, ct, year, quarter, round)
+                if not geom:
+                    continue
+                features.append({
+                    "type": "Feature",
+                    "geometry": geom,
+                    "properties": {
+                        "country": ct,
+                        "name": ct.title(),
+                        "admin_level": 0,
+                        "kind": "data",
+                        "has_data": True,
+                        "eligible": elig,
+                        "treated":  trt,
+                        "percentage": pct,
+                    },
+                })
+        return JSONResponse({"type": "FeatureCollection", "features": features})
+
+    # ----- admin_level=0 outline: one polygon per country, coloured by % ----
+    if admin_level == 0:
+        with get_conn(read_only=True) as conn:
+            for ct in countries:
+                where, params = _where(ct, year, quarter, round)
+                row = conn.execute(
+                    f"""SELECT COALESCE(SUM(children_eligible),0) AS eligible,
+                               COALESCE(SUM(children_treated),0)  AS treated
+                          FROM treatments{where}""", params
+                ).fetchone()
+                elig = int(row["eligible"] or 0)
+                trt  = int(row["treated"]  or 0)
+                pct  = round_pct(trt, elig)
+                geom = _country_outline_geojson(conn, ct)
+                if not geom:
+                    continue
+                features.append({
+                    "type": "Feature",
+                    "geometry": geom,
+                    "properties": {
+                        "country": ct,
+                        "name": ct.title(),
+                        "admin_level": 0,
+                        "has_data": (elig > 0 or trt > 0),
+                        "eligible": elig,
+                        "treated":  trt,
+                        "percentage": pct,
+                    },
+                })
+        return JSONResponse({"type": "FeatureCollection", "features": features})
+
     with get_conn(read_only=True) as conn:
         for ct in countries:
             metric_col = "lga" if admin_level == 2 else "spatial_state"

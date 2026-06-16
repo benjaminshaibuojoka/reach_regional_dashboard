@@ -132,6 +132,10 @@
   "download_methodology_help": "Indicator definitions, formulas, assumptions and sources for every KPI.",
   "coverage_over_100_note": "{{count}} area(s) report coverage above 100%. This typically signals a microplan denominator under-estimate; values are shown as reported (not capped) for verification.",
   "last_updated": "Last updated",
+  "subs_smtp_off_title": "Email delivery is not configured",
+  "subs_smtp_off_body": "You can save subscriptions, but the server has no outbound SMTP set, so no emails will actually be sent. Ask the administrator to configure REACH_SMTP_HOST/REACH_SMTP_FROM (and credentials if your relay requires them) and restart the backend.",
+  "subs_smtp_on_title": "Email delivery is active",
+  "subs_smtp_on_body": "Subscriptions you create here will trigger an immediate confirmation email via {{host}} (from {{from}}).",
 
   "menu_quick_nav": "Quick navigation",
   "menu_countries": "Countries",

@@ -70,7 +70,7 @@ export default function Regional() {
         <div className="panel">
           <PanelHead title={t("chart_treated_country")} help={t("chart_treated_country_help")} source={t("src_regional")} />
           <div className="panel__body panel__body--flush">
-            <MapView country="REGIONAL" filters={filters} adminLevel={1} onPolygonClick={onPolyClick} />
+            <MapView country="REGIONAL" filters={filters} adminLevel={1} onPolygonClick={onPolyClick} labelMode="home" countryLabelCutoff={5.5} />
           </div>
         </div>
       </div>

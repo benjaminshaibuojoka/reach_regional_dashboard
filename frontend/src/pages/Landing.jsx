@@ -43,7 +43,9 @@ export default function Landing() {
               country="REGIONAL" filters={{}} adminLevel={1}
               onPolygonClick={onPolyClick}
               showViewToggle={false}
-              maxZoomOverride={12.5}
+              maxZoomOverride={13.5}
+              labelMode="home"
+              countryLabelCutoff={5.5}
             />
           </div>
         </div>

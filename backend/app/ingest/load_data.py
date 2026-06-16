@@ -25,10 +25,10 @@ from ..database import connect, initialize_schema
 
 EXCEL_PATH = os.environ.get("EXCEL_PATH", "/data_sources/Dami Action_MAIN11.xlsx")
 SHP_DIRS = {
-    # country: (path, admin-1 basename, admin-2 basename)
-    "NIGERIA": (os.environ.get("SHP_NGA", "/data_sources/gadm41_NGA_shp"), "gadm41_NGA_1", "gadm41_NGA_2"),
-    "NIGER":   (os.environ.get("SHP_NER", "/data_sources/gadm41_NER_shp"), "gadm41_NER_1", "gadm41_NER_2"),
-    "MALI":    (os.environ.get("SHP_MLI", "/data_sources/gadm41_MLI_shp"), "gadm41_MLI_1", "gadm41_MLI_2"),
+    # country: (path, admin-0 basename, admin-1 basename, admin-2 basename)
+    "NIGERIA": (os.environ.get("SHP_NGA", "/data_sources/gadm41_NGA_shp"), "gadm41_NGA_0", "gadm41_NGA_1", "gadm41_NGA_2"),
+    "NIGER":   (os.environ.get("SHP_NER", "/data_sources/gadm41_NER_shp"), "gadm41_NER_0", "gadm41_NER_1", "gadm41_NER_2"),
+    "MALI":    (os.environ.get("SHP_MLI", "/data_sources/gadm41_MLI_shp"), "gadm41_MLI_0", "gadm41_MLI_1", "gadm41_MLI_2"),
 }
 
 EXCEL_COLUMN_MAP = {
@@ -104,19 +104,29 @@ def _read_shapes(shp_dir: str, basename: str):
     reader.close()
 
 
-def _simplify_geom(geom_dict, tolerance: float = 0.01):
-    """Drop precision so we don't ship 200KB of decimals per polygon."""
+def _simplify_geom(geom_dict, tolerance: float = 0.01, min_area: float = 0.0):
+    """Drop precision so we don't ship 200KB of decimals per polygon.
+
+    When `min_area` > 0, MultiPolygon parts smaller than that area (in
+    decimal degrees squared) are dropped — useful for admin-0 outlines
+    where coastal micro-islands cause hundreds of tiny rings.
+    """
     try:
         geom = shape(geom_dict)
         if not geom.is_valid:
             geom = geom.buffer(0)
         simplified = geom.simplify(tolerance, preserve_topology=True)
+        if min_area > 0 and simplified.geom_type == "MultiPolygon":
+            kept = [p for p in simplified.geoms if p.area >= min_area]
+            if kept:
+                from shapely.geometry import MultiPolygon as _MP
+                simplified = _MP(kept) if len(kept) > 1 else kept[0]
         return simplified.__geo_interface__
     except Exception:
         return geom_dict
 
 
-def _load_level(conn, country, shp_dir, basename, admin_level, simplify_tol, name_col, parent_col):
+def _load_level(conn, country, shp_dir, basename, admin_level, simplify_tol, name_col, parent_col, min_area: float = 0.0):
     if not Path(shp_dir).exists():
         print(f"[ingest] Shapefile dir missing for {country}: {shp_dir}; skipping L{admin_level}.")
         return 0
@@ -141,7 +151,7 @@ def _load_level(conn, country, shp_dir, basename, admin_level, simplify_tol, nam
                 geom = unary_union([shape(g) for g in geoms]).__geo_interface__
             except Exception:
                 geom = geoms[0]
-        geom = _simplify_geom(geom, tolerance=simplify_tol)
+        geom = _simplify_geom(geom, tolerance=simplify_tol, min_area=min_area)
         # Concat name+parent for uniqueness at L2 (multiple states have same LGA names elsewhere)
         key_upper = (f"{name}|{parent}".upper() if admin_level == 2 else name.upper())
         try:
@@ -162,14 +172,22 @@ def _load_level(conn, country, shp_dir, basename, admin_level, simplify_tol, nam
 def load_boundaries(conn) -> int:
     conn.execute("DELETE FROM boundaries;")
     total = 0
-    for country, (shp_dir, basename1, basename2) in SHP_DIRS.items():
+    for country, (shp_dir, basename0, basename1, basename2) in SHP_DIRS.items():
+        # min_area=0.05 sq° (~25 km × 25 km at this latitude) drops the
+        # coastal micro-islands that bloat Nigeria's admin-0 outline.
+        n0 = _load_level(conn, country, shp_dir, basename0, admin_level=0,
+                         simplify_tol=0.02, name_col="COUNTRY", parent_col=None,
+                         min_area=0.05)
+        # The admin-0 shapefile uses "COUNTRY" as the name attribute in GADM 4.1.
+        # If the records had different headers we'd see 0 here.
+        print(f"[ingest] Loaded {n0} admin-0 polygons for {country}.")
         n1 = _load_level(conn, country, shp_dir, basename1, admin_level=1,
                          simplify_tol=0.01, name_col="NAME_1", parent_col=None)
         print(f"[ingest] Loaded {n1} admin-1 polygons for {country}.")
         n2 = _load_level(conn, country, shp_dir, basename2, admin_level=2,
                          simplify_tol=0.005, name_col="NAME_2", parent_col="NAME_1")
         print(f"[ingest] Loaded {n2} admin-2 polygons for {country}.")
-        total += n1 + n2
+        total += n0 + n1 + n2
     conn.commit()
     print(f"[ingest] Boundaries total: {total}")
     return total

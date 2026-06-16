@@ -78,7 +78,7 @@ export default function CountryPage({ country }) {
         <div className="panel">
           <PanelHead title={t("chart_treated_state")} help={t("chart_treated_state_help")} source={t(SOURCES[country])} />
           <div className="panel__body panel__body--flush">
-            <MapView country={country} filters={filters} adminLevel={1} onPolygonClick={onPolyClick} />
+            <MapView country={country} filters={filters} adminLevel={1} onPolygonClick={onPolyClick} labelMode="state" />
           </div>
         </div>
       </div>

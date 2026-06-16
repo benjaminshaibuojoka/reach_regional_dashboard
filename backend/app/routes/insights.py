@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, EmailStr
 
 from ..database import get_conn
+from .. import mail
 
 router = APIRouter()
 
@@ -312,6 +313,16 @@ class ReportRequest(BaseModel):
     timezone:  Optional[str] = "Africa/Lagos"
 
 
+@router.get("/mail-status")
+def mail_status():
+    """Surface whether outbound email is configured. The Subscriptions UI
+    uses this to warn the user before they fill the form."""
+    return {"configured": mail.is_configured(),
+            "host": mail.SMTP_HOST if mail.is_configured() else None,
+            "from": mail.SMTP_FROM if mail.is_configured() else None,
+            "mode": mail.SMTP_MODE if mail.is_configured() else None}
+
+
 @router.get("/reports")
 def list_reports():
     with get_conn(read_only=True) as conn:
@@ -340,11 +351,24 @@ def create_report(req: ReportRequest):
               req.send_time, req.timezone))
         conn.commit()
         last = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+
+    # Send confirmation email immediately so the user knows it actually went out.
+    subj, body = mail.confirmation_report(
+        [str(e) for e in req.emails], req.scopes, req.format, req.cadence,
+        req.send_time, req.timezone,
+    )
+    ok, detail = mail.send_mail([str(e) for e in req.emails], subj, body)
+    note = ("Subscription created and confirmation email sent."
+            if ok else
+            ("Subscription saved, but no email was sent — SMTP is not configured. "
+             "Set REACH_SMTP_HOST/REACH_SMTP_FROM (and REACH_SMTP_USER/PASS if your "
+             "relay requires auth) and restart the backend to enable delivery."
+             if detail == "smtp_not_configured" else
+             f"Subscription saved, but the test email failed to send: {detail}."))
     return {"id": last, "queued": True,
             "emails": req.emails, "scopes": req.scopes,
             "send_time": req.send_time, "timezone": req.timezone,
-            "note": "SMTP is not configured in this build; the schedule is persisted "
-                    "and will be delivered once outbound email is wired."}
+            "mail_sent": ok, "mail_detail": detail, "note": note}
 
 
 @router.delete("/reports/{id}")
@@ -378,16 +402,28 @@ def create_alert(req: AlertRequest):
         raise HTTPException(400, "metric must be one of " + ", ".join(METRICS))
     if req.comparison not in {"lt", "gt", "eq"}:
         raise HTTPException(400, "comparison must be lt, gt, or eq")
+    scope = (req.scope or "REGIONAL").upper()
     with get_conn() as conn:
         conn.execute("""
             INSERT INTO alerts (email, metric, comparison, threshold, scope)
             VALUES (?, ?, ?, ?, ?)
-        """, (req.email, req.metric, req.comparison, req.threshold,
-              (req.scope or "REGIONAL").upper()))
+        """, (req.email, req.metric, req.comparison, req.threshold, scope))
         conn.commit()
         last = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+
+    subj, body = mail.confirmation_alert(
+        str(req.email), req.metric, req.comparison, req.threshold, scope,
+    )
+    ok, detail = mail.send_mail(str(req.email), subj, body)
+    note = ("Alert armed and confirmation email sent."
+            if ok else
+            ("Alert armed, but no email was sent — SMTP is not configured. "
+             "Set REACH_SMTP_HOST/REACH_SMTP_FROM (and credentials if needed) "
+             "and restart the backend to enable delivery."
+             if detail == "smtp_not_configured" else
+             f"Alert armed, but the test email failed to send: {detail}."))
     return {"id": last, "armed": True,
-            "note": "SMTP is not configured in this build; the alert is persisted."}
+            "mail_sent": ok, "mail_detail": detail, "note": note}
 
 
 @router.delete("/alerts/{id}")
@@ -435,8 +471,19 @@ def create_feedback(req: FeedbackRequest):
         """, (req.kind, subj[:200], msg[:4000], req.email, req.username, (req.page or "")[:120]))
         conn.commit()
         last = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+
+    # Confirmation back to the submitter (if they gave an email).
+    mail_sent, mail_detail = False, "no_email_provided"
+    if req.email:
+        msubj, mbody = mail.confirmation_feedback(req.kind, subj, msg, req.page, req.username)
+        mail_sent, mail_detail = mail.send_mail(str(req.email), msubj, mbody)
+    note = ("Received. A confirmation email has been sent to the submitter."
+            if mail_sent else
+            "Received. No confirmation email was sent (SMTP not configured or no email provided)."
+            if mail_detail in {"smtp_not_configured", "no_email_provided"} else
+            f"Received, but the confirmation email failed: {mail_detail}.")
     return {"id": last, "received": True,
-            "note": "Persisted; the REACH team will review and respond if a follow-up is needed."}
+            "mail_sent": mail_sent, "mail_detail": mail_detail, "note": note}
 
 
 # ---------------------------------------------------------------------------

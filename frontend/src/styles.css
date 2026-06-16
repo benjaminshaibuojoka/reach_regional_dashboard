@@ -386,7 +386,12 @@ button { font-family: inherit; }
   min-height: 0;
 }
 .content--cols  { grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); }
-.content--landing { grid-template-columns: minmax(0, 1fr) 230px; }
+/* Landing: keep map panel close to square so fitBounds fills it (no wide
+   horizontal whitespace around the 3-country extent). */
+.content--landing { grid-template-columns: minmax(0, 1fr) 360px; }
+@media (min-width: 1500px) {
+  .content--landing { grid-template-columns: minmax(0, 1fr) 420px; }
+}
 .left-col {
   display: grid; gap: var(--content-gap);
   grid-template-rows: 1.1fr 1fr;
@@ -670,22 +675,33 @@ button { font-family: inherit; }
   font-size: 9px;
 }
 
-/* Permanent labels on map polygons */
+/* Permanent labels on map polygons (font-size is set inline by AdaptiveLabels
+   so it can scale with zoom). */
 .map-label {
   background: transparent;
   border: 0;
   pointer-events: none;
-  font: 800 7px Inter, system-ui;
+  font-family: Inter, system-ui;
+  font-weight: 800;
   letter-spacing: .03em;
   color: #1f2937;
   text-shadow:
-    0 0 2px rgba(255,255,255,1),
-    0 0 2px rgba(255,255,255,1),
-    0 0 2px rgba(255,255,255,1);
+    0 0 3px rgba(255,255,255,1),
+    0 0 3px rgba(255,255,255,1),
+    0 0 3px rgba(255,255,255,1);
   white-space: nowrap;
   transform: translate(-50%, -50%);
 }
-.map-label--state { font-size: 7px; }
+.map-label--country {
+  color: #2a2825;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.map-label--country b {
+  color: #8a7615;
+  margin-left: 3px;
+}
+.map-label--state { letter-spacing: .02em; }
 
 .legend {
   position: absolute; left: 8px; bottom: 8px;
@@ -2154,3 +2170,36 @@ textarea:focus-visible {
   margin-top: 2px; font-weight: 600;
   letter-spacing: 0.02em;
 }
+
+/* ============================================================== */
+/*  Subscriptions / mail status banners                            */
+/* ============================================================== */
+.subs-banner {
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0 0 12px 0;
+  border-left: 4px solid;
+}
+.subs-banner b { display: block; font-size: 12.5px; margin-bottom: 4px; }
+
+.subs-banner--ok {
+  background: #f1faf0; color: #2c5b2c; border-color: #4caf50;
+}
+.subs-banner--warn {
+  background: #fdf4cd; color: #6d5f09; border-color: #c1a82c;
+}
+
+.subs-msg {
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  margin-top: 12px;
+  border-left: 4px solid;
+}
+.subs-msg--info { background: #f5f3ee; color: #66625e; border-color: #aaa19a; }
+.subs-msg--ok   { background: #f1faf0; color: #2c5b2c; border-color: #4caf50; }
+.subs-msg--warn { background: #fdf4cd; color: #6d5f09; border-color: #c1a82c; }
+.subs-msg--err  { background: #fdecec; color: #8b2929; border-color: #d96666; }

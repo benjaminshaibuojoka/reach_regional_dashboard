@@ -72,12 +72,17 @@ export default function Subscriptions({ defaultScope = "REGIONAL", onClose }) {
   const [reports, setReports] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [msg, setMsg] = useState("");
+  const [msgKind, setMsgKind] = useState("info"); // info | ok | warn | err
+  const [mailStatus, setMailStatus] = useState(null);
 
   const load = () => {
     apiFetch(`${root}/reports`).then(r => r.json()).then(setReports).catch(() => {});
     apiFetch(`${root}/alerts`).then(r => r.json()).then(setAlerts).catch(() => {});
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    apiFetch(`${root}/mail-status`).then(r => r.json()).then(setMailStatus).catch(() => {});
+  }, []);
 
   const [r, setR] = useState({
     emails: [], scopes: [defaultScope],
@@ -88,22 +93,32 @@ export default function Subscriptions({ defaultScope = "REGIONAL", onClose }) {
   const [a, setA] = useState({ email: "", metric: "percentage", comparison: "lt", threshold: 80, scope: defaultScope });
 
   const submitReport = async (e) => {
-    e.preventDefault(); setMsg("");
-    if (r.emails.length === 0 || r.scopes.length === 0) { setMsg(t("subs_err")); return; }
+    e.preventDefault(); setMsg(""); setMsgKind("info");
+    if (r.emails.length === 0 || r.scopes.length === 0) {
+      setMsg(t("subs_err")); setMsgKind("err"); return;
+    }
     const res = await apiFetch(`${root}/reports`, {
       method: "POST", body: JSON.stringify(r),
     });
-    if (!res.ok) { setMsg(t("subs_err")); return; }
-    setMsg(t("subs_ok_report")); setR({ ...r, emails: [] }); load();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { setMsg(data.detail || t("subs_err")); setMsgKind("err"); return; }
+    setMsg(data.note || t("subs_ok_report"));
+    setMsgKind(data.mail_sent ? "ok" : "warn");
+    setR({ ...r, emails: [] });
+    load();
   };
 
   const submitAlert = async (e) => {
-    e.preventDefault(); setMsg("");
+    e.preventDefault(); setMsg(""); setMsgKind("info");
     const res = await apiFetch(`${root}/alerts`, {
       method: "POST", body: JSON.stringify(a),
     });
-    if (!res.ok) { setMsg(t("subs_err")); return; }
-    setMsg(t("subs_ok_alert")); setA({ ...a, email: "" }); load();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { setMsg(data.detail || t("subs_err")); setMsgKind("err"); return; }
+    setMsg(data.note || t("subs_ok_alert"));
+    setMsgKind(data.mail_sent ? "ok" : "warn");
+    setA({ ...a, email: "" });
+    load();
   };
 
   const del = async (kind, id) => { await apiFetch(`${root}/${kind}/${id}`, { method: "DELETE" }); load(); };
@@ -148,6 +163,19 @@ export default function Subscriptions({ defaultScope = "REGIONAL", onClose }) {
         </div>
 
         <div className="subs-body">
+          {mailStatus && !mailStatus.configured && (
+            <div className="subs-banner subs-banner--warn" role="status">
+              <b>{t("subs_smtp_off_title")}</b>
+              <div>{t("subs_smtp_off_body")}</div>
+            </div>
+          )}
+          {mailStatus?.configured && (
+            <div className="subs-banner subs-banner--ok" role="status">
+              <b>{t("subs_smtp_on_title")}</b>
+              <div>{t("subs_smtp_on_body", { host: mailStatus.host, from: mailStatus.from })}</div>
+            </div>
+          )}
+
           {tab === "reports" && (
             <>
               <div className="tab-hint">{t("subs_hint_reports")}</div>
@@ -264,7 +292,11 @@ export default function Subscriptions({ defaultScope = "REGIONAL", onClose }) {
             </>
           )}
 
-          {msg && <div className="modal__msg">{msg}</div>}
+          {msg && (
+            <div className={`subs-msg subs-msg--${msgKind}`} role="status">
+              {msg}
+            </div>
+          )}
         </div>
 
         <footer className="ai-foot">
