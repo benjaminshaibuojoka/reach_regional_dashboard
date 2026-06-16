@@ -6,6 +6,7 @@ import MapView from "../components/MapView.jsx";
 import PanelHead from "../components/PanelHead.jsx";
 import SideMenu from "../components/SideMenu.jsx";
 import FloatingMenu from "../components/FloatingMenu.jsx";
+import CountryHighlights from "../components/CountryHighlights.jsx";
 import { api } from "../api.js";
 import { useNavigate } from "react-router-dom";
 
@@ -36,7 +37,7 @@ export default function Landing() {
       <KpiRow data={kpis} scope={{}} />
 
       <div className="content content--landing">
-        <div className="panel">
+        <div className="panel panel--glass">
           <PanelHead title={t("chart_treated_country")} help={t("chart_treated_country_help")} source={t("src_regional")} />
           <div className="panel__body panel__body--flush">
             <MapView
@@ -48,6 +49,10 @@ export default function Landing() {
               countryLabelCutoff={5.5}
             />
           </div>
+        </div>
+
+        <div className="panel panel--glass panel--momentum">
+          <CountryHighlights layout="vertical" />
         </div>
 
         <SideMenu />

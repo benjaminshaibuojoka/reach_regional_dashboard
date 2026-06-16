@@ -401,10 +401,33 @@ export default function MapView({
 
       {showLegend && (
         view === "growth" ? (
-          <div className="legend">
+          // Discrete legend that mirrors `colorGrowth` exactly — one swatch
+          // per band, each labelled with its data threshold. The ordering
+          // (loss on the left, gain on the right) and the colour values
+          // come straight from the same function the map uses.
+          <div className="legend legend--growth">
             <div className="legend__title">{t("map_view_growth")} %</div>
-            <div className="legend__bar legend__bar--diverging" />
-            <div className="legend__ticks"><span>−20</span><span>0</span><span>+20</span></div>
+            <div className="legend__steps">
+              {[
+                { color: "#7a3a18", label: "≤−20" },
+                { color: "#a3582f", label: "−10"  },
+                { color: "#cc8a5e", label: "−3"   },
+                { color: "#f5e9b6", label: "0"    },
+                { color: "#ecd966", label: "+3"   },
+                { color: "#c1a82c", label: "+10"  },
+                { color: "#7a6510", label: "+20"  },
+              ].map((s) => (
+                <div key={s.label} className="legend__step">
+                  <span className="legend__swatch" style={{ background: s.color }} />
+                  <span className="legend__step-label">{s.label}</span>
+                </div>
+              ))}
+            </div>
+            <div className="legend__caption">
+              {t("growth_legend_caption", {
+                defaultValue: "Loss ← round-on-round change in treated → Gain",
+              })}
+            </div>
           </div>
         ) : (
           <div className="legend">
