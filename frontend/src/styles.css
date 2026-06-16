@@ -2423,10 +2423,11 @@ textarea:focus-visible {
   flex-shrink: 0;
 }
 
-/* Row 2: Big % + Delta ------------------------------------------ */
+/* Row 2: Big % + plain-language delta phrase --------------------- */
 .momentum__cov-head {
   display: flex; align-items: baseline; justify-content: space-between;
   gap: 8px;
+  flex-wrap: nowrap;
 }
 .momentum__pct {
   font-size: 19px; line-height: 1;
@@ -2441,9 +2442,10 @@ textarea:focus-visible {
 }
 
 .momentum__delta {
-  font-size: 11px; font-weight: 700;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
+  font-size: 10.5px; font-weight: 700;
+  letter-spacing: 0.01em;
+  text-align: right;
+  line-height: 1.25;
 }
 .momentum__delta--up   { color: #15803d; }
 .momentum__delta--down { color: #b14a2a; }
@@ -2476,27 +2478,20 @@ textarea:focus-visible {
 }
 .momentum__bar-wrap .sparkline { flex-shrink: 0; }
 
-/* Row 4: Compact inline stats line — one line, never wraps ----- */
+/* Row 4: "26.6M of 29.2M children reached" — plain English ----- */
 .momentum__stats-line {
-  display: flex; align-items: baseline;
-  gap: 4px;
-  font-size: 10px;
+  font-size: 10.5px;
   color: var(--ink-500, #66625e);
   font-variant-numeric: tabular-nums;
-  line-height: 1.2;
-  white-space: nowrap;
-  overflow: hidden;
+  line-height: 1.35;
 }
 .momentum__stats-line b {
   color: var(--ink-900, #2a2825);
   font-weight: 800;
-  font-size: 11px;
+  font-size: 11.5px;
 }
 .momentum__stats-label {
   color: var(--ink-500, #66625e);
-  font-size: 9.5px;
-  margin-left: 4px;
-  overflow: hidden; text-overflow: ellipsis;
 }
 .momentum__stats-sep { color: var(--ink-300, #aaa19a); font-weight: 600; }
 
